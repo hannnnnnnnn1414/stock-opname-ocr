@@ -1,8 +1,8 @@
 <!-- Core Scripts -->
-<script src="{{ asset('templates/assets/js/core/popper.min.js') }}"></script>
-<script src="{{ asset('templates/assets/js/core/bootstrap.min.js') }}"></script>
-<script src="{{ asset('templates/assets/js/plugins/perfect-scrollbar.min.js') }}"></script>
-<script src="{{ asset('templates/assets/js/plugins/smooth-scrollbar.min.js') }}"></script>
+<script src="{{ asset('js/core/popper.min.js') }}"></script>
+<script src="{{ asset('js/core/bootstrap.min.js') }}"></script>
+<script src="{{ asset('js/plugins/perfect-scrollbar.min.js') }}"></script>
+<script src="{{ asset('js/plugins/smooth-scrollbar.min.js') }}"></script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.5/dist/js/bootstrap.bundle.min.js"></script>
 
 <!-- Custom Scripts -->
@@ -45,7 +45,7 @@
 <script async defer src="https://buttons.github.io/buttons.js"></script>
 
 <!-- Control Center for Soft Dashboard -->
-<script src="{{asset('templates/assets/js/soft-ui-dashboard.min.js?v=1.0.3')}}"></script>
+<script src="{{asset('assets/js/soft-ui-dashboard.min.js?v=1.0.3')}}"></script>
 
 <!-- AJAX Pagination -->
 <script>
