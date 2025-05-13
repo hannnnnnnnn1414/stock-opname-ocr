@@ -94,13 +94,15 @@ class ProcessStockOpname extends Command
     $data = $response->json();
     $this->info('API Response: ' . json_encode($data));
 
-    if (isset($data['data']['result_data'])) {
-        $this->displayFormattedResult($data['data']['result_data']);
+    if (isset($data['data']['result_data']['forms'])) {
+    foreach ($data['data']['result_data']['forms'] as $form) {
+        $this->displayFormattedResult($form);
         $newImagePath = $this->moveProcessedFileAndGetPath($filePath);
-        $this->saveToDatabase($data['data'], $newImagePath);
-    } else {
-        $this->error("Result data not found in response.");
+        $this->saveToDatabase($data['data'], $form, $newImagePath);
     }
+} else {
+    $this->error("Result data not found in response.");
+}
     
     // Move processed file
 }
@@ -174,23 +176,24 @@ class ProcessStockOpname extends Command
         $this->line("<fg=cyan>└──────────────────────────────</>\n");
     }
 
-    private function saveToDatabase($data, $imagePath)
-    {
-        StockOpnameResult::create([
-            'reference_id' => $data['reference_id'], // Use reference_id from the main data
-            'tanggal' => \Carbon\Carbon::createFromFormat('d-m-Y', $data['result_data']['tanggal']), // Access tanggal from result_data
-            'jam' => $data['result_data']['jam'], // Access jam from result_data
-            'location' => $data['result_data']['location'], // Access location from result_data
-            'warehouse' => $data['result_data']['warehouse'], // Access warehouse from result_data
-            'nomor_form' => $data['result_data']['nomor_form'], // Access nomor_form from result_data
-            'nama_part' => $data['result_data']['nama_part'], // Access nama_part from result_data
-            'nomor_part' => $data['result_data']['nomor_part'], // Access nomor_part from result_data
-            'satuan' => $data['result_data']['satuan'], // Access satuan from result_data
-            'quantity_good' => (int)$data['result_data']['quantity']['good'], // Access quantity good from result_data
-            'quantity_reject' => $data['result_data']['quantity']['reject'] === 'N/A' ? null : (int)$data['result_data']['quantity']['reject'], // Access quantity reject from result_data
-            'quantity_repair' => $data['result_data']['quantity']['repair'] === 'N/A' ? null : (int)$data['result_data']['quantity']['repair'], // Access quantity repair from result_data
-            'image_path' => $imagePath,
-        ]);
-    }
+    private function saveToDatabase($data, $form, $imagePath)
+{
+    StockOpnameResult::create([
+        'reference_id' => $data['reference_id'],
+        'tanggal' => \Carbon\Carbon::createFromFormat('d-m-Y', $form['tanggal']),
+        'jam' => $form['jam'],
+        'location' => $form['location'],
+        'warehouse' => $form['warehouse'],
+        'nomor_form' => $form['nomor_form'],
+        'nama_part' => $form['nama_part'],
+        'nomor_part' => $form['nomor_part'],
+        'satuan' => $form['satuan'],
+        'quantity_good' => (int) $form['quantity']['good'],
+        'quantity_reject' => $form['quantity']['reject'] === 'N/A' ? null : (int)$form['quantity']['reject'],
+        'quantity_repair' => $form['quantity']['repair'] === 'N/A' ? null : (int)$form['quantity']['repair'],
+        'image_path' => $imagePath,
+    ]);
+}
+
 
 }
