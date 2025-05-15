@@ -3,7 +3,7 @@
   @include('components.head')
 
   <body class="g-sidenav-show bg-gray-100">
-    @include('components.sidebar')
+    {{-- @include('components.sidebar') --}}
     
     <main class="main-content position-relative max-height-vh-100 h-100 mt-1 border-radius-lg">
       @include('components.navbar')
@@ -146,9 +146,9 @@
               <ul class="pagination pagination-sm">
                   {{-- Previous Page Link --}}
                   @if ($stockOpnameResults->onFirstPage())
-                      <li class="page-item disabled"><span class="page-link">&laquo;</span></li>
+                      <li class="page-item disabled"><span class="page-link">«</span></li>
                   @else
-                      <li class="page-item"><a class="page-link" href="{{ $stockOpnameResults->previousPageUrl() }}">&laquo;</a></li>
+                      <li class="page-item"><a class="page-link" href="{{ $stockOpnameResults->previousPageUrl() }}">«</a></li>
                   @endif
 
                   {{-- Pagination Elements --}}
@@ -160,9 +160,9 @@
 
                   {{-- Next Page Link --}}
                   @if ($stockOpnameResults->hasMorePages())
-                      <li class="page-item"><a class="page-link" href="{{ $stockOpnameResults->nextPageUrl() }}">&raquo;</a></li>
+                      <li class="page-item"><a class="page-link" href="{{ $stockOpnameResults->nextPageUrl() }}">»</a></li>
                   @else
-                      <li class="page-item disabled"><span class="page-link">&raquo;</span></li>
+                      <li class="page-item disabled"><span class="page-link">»</span></li>
                   @endif
               </ul>
             </nav>
@@ -211,7 +211,7 @@
     </div>
   </div>
 
-  <!--   Core JS Files   -->
+  <!-- Core JS Files -->
   @include('components.scripts')
   </body>
 </html>

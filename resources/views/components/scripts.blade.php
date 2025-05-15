@@ -96,3 +96,25 @@
         }
     });
 </script>
+
+<!-- Script untuk Jam Real-Time -->
+  <script>
+    function updateClock() {
+      const now = new Date();
+      // Sesuaikan dengan WIB (UTC+7)
+      const wibOffset = 7 * 60; // Offset dalam menit
+      const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+      const wibTime = new Date(utc + (wibOffset * 60000));
+      
+      const hours = String(wibTime.getHours()).padStart(2, '0');
+      const minutes = String(wibTime.getMinutes()).padStart(2, '0');
+      const seconds = String(wibTime.getSeconds()).padStart(2, '0');
+      
+      document.getElementById('liveClock').textContent = `${hours}:${minutes}:${seconds} WIB`;
+    }
+
+    // Update jam setiap detik
+    setInterval(updateClock, 1000);
+    // Jalankan sekali saat load
+    updateClock();
+  </script>
