@@ -62,7 +62,7 @@ return [
 
         'stock_opname' => [
         'driver' => 'local',
-        'root' => env('STOCK_OPNAME_DIR', 'C:/stock_opname'),
+        'root' => env('STOCK_OPNAME_DIR', 'C:/OCR_KYBI'),
         ],
 
     ],

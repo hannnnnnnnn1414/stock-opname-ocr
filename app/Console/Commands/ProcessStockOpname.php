@@ -14,15 +14,20 @@ class ProcessStockOpname extends Command
     protected $signature = 'stock-opname:process';
     protected $description = 'Process stock opname forms from directory';
 
-    protected $sourceDir = 'to_process';
+    protected $sourceDir = ''; // Nyari file di root C:/OCR_KYBI
     protected $processedDir = 'finished';
+    protected $scannedDir = 'scanned'; // Folder buat hasil split
+    protected $toProcessDir = 'to_process'; // Folder buat proses OCR
 
     public function handle()
     {
         $disk = Storage::disk('stock_opname');
         
+        // Pastiin semua folder ada
         $disk->makeDirectory($this->sourceDir);
         $disk->makeDirectory($this->processedDir);
+        $disk->makeDirectory($this->scannedDir);
+        $disk->makeDirectory($this->toProcessDir);
         $disk->makeDirectory('error_400');
         $disk->makeDirectory('error_401');
         $disk->makeDirectory('rejected');
@@ -31,7 +36,8 @@ class ProcessStockOpname extends Command
 
         $this->info('Starting stock opname processing...');
         $this->info('Verihubs Config: ' . json_encode(config('services.verihubs')));
-        $this->info('Storage Path: ' . Storage::path($this->sourceDir));
+        $this->info('Storage Root: ' . $disk->path('')); // Debug root path
+        $this->info('Storage Path: ' . $disk->path($this->sourceDir));
         $this->info('Files to process: ' . json_encode($files));
 
         foreach ($files as $file) {
@@ -55,13 +61,6 @@ class ProcessStockOpname extends Command
 
         $this->line("\n<fg=blue>🔍 Processing file:</> {$filePath}");
 
-        // Cek jam (kalo perlu, uncomment)
-        // $currentHour = now()->format('H:i');
-        // if ($currentHour >= '14:32') {
-        //     $this->moveErrorFile($filePath, 'rejected');
-        //     return;
-        // }
-
         // Kalo PDF, split dulu
         if ($extension === 'pdf') {
             $this->processPdfFile($filePath, $fullPath, $filename);
@@ -82,6 +81,7 @@ class ProcessStockOpname extends Command
 
             $this->info("Split PDF {$filename} yang punya {$pageCount} halaman...");
 
+            // Split PDF dan simpen ke scanned
             for ($page = 1; $page <= $pageCount; $page++) {
                 $newPdf = new Fpdi();
                 $newPdf->AddPage();
@@ -90,13 +90,21 @@ class ProcessStockOpname extends Command
                 $newPdf->useTemplate($tplIdx);
 
                 $pageFilename = pathinfo($filename, PATHINFO_FILENAME) . "_hal{$page}.pdf";
-                $pagePath = "{$tempDir}/{$pageFilename}";
-                $newPdf->Output($disk->path($pagePath), 'F');
+                $scannedPath = "{$this->scannedDir}/{$pageFilename}"; // Simpen ke scanned
+                $newPdf->Output($disk->path($scannedPath), 'F');
 
-                $this->info("Halaman {$page} jadi: {$pagePath}");
-                $this->processSingleFile($pagePath, $disk->path($pagePath));
+                $this->info("Halaman {$page} disimpen ke: {$scannedPath}");
+
+                // Pindahin dari scanned ke to_process
+                $toProcessPath = "{$this->toProcessDir}/{$pageFilename}";
+                $disk->move($scannedPath, $toProcessPath);
+                $this->info("Halaman {$page} dipindah ke: {$toProcessPath}");
+
+                // Proses file di to_process
+                $this->processSingleFile($toProcessPath, $disk->path($toProcessPath));
             }
 
+            // Pindahin PDF asli ke finished
             $this->moveProcessedFileAndGetPath($filePath);
             $disk->deleteDirectory($tempDir);
         } catch (\Exception $e) {
