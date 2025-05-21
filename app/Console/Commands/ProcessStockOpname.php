@@ -130,51 +130,55 @@ class ProcessStockOpname extends Command
     }
 
     private function processSingleFile($filePath, $fullPath)
-    {
-        $disk = Storage::disk('stock_opname');
+{
+    $disk = Storage::disk('stock_opname');
 
-        try {
-            // Kirim ke Verihubs OCR API
-            $response = Http::withHeaders([
-                'App-ID' => config('services.verihubs.app_id'),
-                'API-Key' => config('services.verihubs.api_key'),
-            ])
-                ->timeout(120)
-                ->attach('image', file_get_contents($fullPath), basename($fullPath))
-                ->post('https://api.verihubs.com/v2/ocr/stock_opname');
+    try {
+        // Kirim ke Verihubs OCR API
+        $response = Http::withHeaders([
+            'App-ID' => config('services.verihubs.app_id'),
+            'API-Key' => config('services.verihubs.api_key'),
+        ])
+            ->timeout(120)
+            ->attach('image', file_get_contents($fullPath), basename($fullPath))
+            ->post('https://api.verihubs.com/v2/ocr/stock_opname');
 
-            if ($response->failed()) {
-                $this->handleApiError($response, $filePath);
-                return;
+        if ($response->failed()) {
+            $this->handleApiError($response, $filePath);
+            return;
+        }
+
+        $data = $response->json();
+        $this->info('API Response: ' . json_encode($data));
+
+        if (isset($data['data']['result_data']['forms'])) {
+            foreach ($data['data']['result_data']['forms'] as $form) {
+                $this->displayFormattedResult($form);
+                // Simpan ke database dengan path sementara
+                $this->saveToDatabase($data['data'], $form, $filePath);
+                // Pindahkan ke finished dan perbarui image_path
+                $newPath = $this->moveProcessedFile($filePath, $this->processedDir);
+                // Perbarui image_path di database
+                StockOpnameResult::where('image_path', $filePath)
+                    ->update(['image_path' => $newPath]);
             }
-
-            $data = $response->json();
-            $this->info('API Response: ' . json_encode($data));
-
-            if (isset($data['data']['result_data']['forms'])) {
-                foreach ($data['data']['result_data']['forms'] as $form) {
-                    $this->displayFormattedResult($form);
-                    $this->saveToDatabase($data['data'], $form, $filePath);
-                    // Pindahkan ke finished setelah sukses
-                    $this->moveProcessedFile($filePath, $this->processedDir);
-                }
-            } else {
-                $this->error("Result data not found in response for {$filePath}.");
-                \Illuminate\Support\Facades\Log::error("No result data for file {$filePath}");
-                // Pindahkan ke rejected jika tidak ada result data
-                $this->moveProcessedFile($filePath, $this->rejectedDir);
-            }
-        } catch (\Exception $e) {
-            $this->error("Error processing file {$filePath}: " . $e->getMessage());
-            \Illuminate\Support\Facades\Log::error("Error processing file {$filePath}: {$e->getMessage()}");
-            // Cek apakah error adalah cURL timeout
-            if (strpos($e->getMessage(), 'cURL error 28') !== false) {
-                $this->moveErrorFile($filePath, 'error_timeout');
-            } else {
-                $this->moveErrorFile($filePath, $this->errorDir);
-            }
+        } else {
+            $this->error("Result data not found in response for {$filePath}.");
+            \Illuminate\Support\Facades\Log::error("No result data for file {$filePath}");
+            // Pindahkan ke rejected
+            $newPath = $this->moveProcessedFile($filePath, $this->rejectedDir);
+        }
+    } catch (\Exception $e) {
+        $this->error("Error processing file {$filePath}: " . $e->getMessage());
+        \Illuminate\Support\Facades\Log::error("Error processing file {$filePath}: {$e->getMessage()}");
+        // Cek apakah error adalah cURL timeout
+        if (strpos($e->getMessage(), 'cURL error 28') !== false) {
+            $this->moveErrorFile($filePath, 'error_timeout');
+        } else {
+            $this->moveErrorFile($filePath, $this->errorDir);
         }
     }
+}
 
     private function moveToScanned($filePath)
     {
