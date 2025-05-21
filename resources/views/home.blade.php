@@ -124,7 +124,7 @@
                               <a class="badge text-bg-danger" 
                                  onclick="showImageModal('{{ url('/stock-opname/image/'.$result->image_path) }}')">
                                   <i class="fas fa-file-pdf fa-2x"></i>
-                                  <span class="ms-1">Lihat PDF</span>
+                                  <span class="ms-1" style="cursor:pointer;" >Lihat PDF</span>
                               </a>
                           @else
                               <img src="{{ url('/stock-opname/image/'.$result->image_path) }}" 

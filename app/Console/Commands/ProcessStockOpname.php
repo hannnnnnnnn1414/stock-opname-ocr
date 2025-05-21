@@ -5,38 +5,43 @@ namespace App\Console\Commands;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
-use App\Models\StockOpnameResult;
 use setasign\Fpdi\Fpdi;
+use App\Models\StockOpnameResult;
 
 class ProcessStockOpname extends Command
 {
     protected $signature = 'stock-opname:process';
     protected $description = 'Process stock opname forms from directory';
 
-    protected $sourceDir = ''; // Nyari file di root C:/OCR_KYBI
+    protected $sourceDir = ''; // Root folder OCR_KYBI
     protected $processedDir = 'finished';
-    protected $scannedDir = 'scanned'; // Folder buat hasil split
-    protected $toProcessDir = 'to_process'; // Folder buat proses OCR
+    protected $scannedDir = 'scanned'; // Folder untuk file asli
+    protected $toProcessDir = 'to_process'; // Folder untuk halaman hasil split
+    protected $rejectedDir = 'rejected'; // Folder untuk file rejected
+    protected $errorDir = 'error'; // Folder untuk file error umum
 
     public function handle()
     {
         $disk = Storage::disk('stock_opname');
-        
-        // Pastiin semua folder ada
+
+        // Pastikan semua folder ada
         $disk->makeDirectory($this->sourceDir);
         $disk->makeDirectory($this->processedDir);
         $disk->makeDirectory($this->scannedDir);
         $disk->makeDirectory($this->toProcessDir);
+        $disk->makeDirectory($this->rejectedDir);
+        $disk->makeDirectory($this->errorDir);
+        // Tambahkan folder untuk error spesifik
         $disk->makeDirectory('error_400');
         $disk->makeDirectory('error_401');
-        $disk->makeDirectory('rejected');
+        $disk->makeDirectory('error_500');
+        $disk->makeDirectory('error_timeout'); // Folder untuk cURL timeout
 
         $files = $disk->files($this->sourceDir);
 
         $this->info('Starting stock opname processing...');
         $this->info('Verihubs Config: ' . json_encode(config('services.verihubs')));
-        $this->info('Storage Root: ' . $disk->path('')); // Debug root path
+        $this->info('Storage Root: ' . $disk->path(''));
         $this->info('Storage Path: ' . $disk->path($this->sourceDir));
         $this->info('Files to process: ' . json_encode($files));
 
@@ -45,7 +50,13 @@ class ProcessStockOpname extends Command
                 $this->processFile($file);
             } catch (\Exception $e) {
                 $this->error("Error processing file {$file}: " . $e->getMessage());
-                continue;
+                \Illuminate\Support\Facades\Log::error("General Error for file {$file}: {$e->getMessage()}");
+                // Cek apakah error adalah cURL timeout
+                if (strpos($e->getMessage(), 'cURL error 28') !== false) {
+                    $this->moveErrorFile($file, 'error_timeout');
+                } else {
+                    $this->moveErrorFile($file, $this->errorDir); // Error umum (misalnya, gagal split PDF)
+                }
             }
         }
 
@@ -61,11 +72,15 @@ class ProcessStockOpname extends Command
 
         $this->line("\n<fg=blue>🔍 Processing file:</> {$filePath}");
 
-        // Kalo PDF, split dulu
+        // Jika PDF, split dan pindahkan ke scanned serta halaman ke to_process
         if ($extension === 'pdf') {
             $this->processPdfFile($filePath, $fullPath, $filename);
         } else {
-            $this->processSingleFile($filePath, $fullPath);
+            // Pindahkan file asli ke scanned
+            $scannedPath = $this->moveToScanned($filePath);
+            // Proses file langsung di to_process
+            $toProcessPath = $this->moveToProcess($filePath);
+            $this->processSingleFile($toProcessPath, $disk->path($toProcessPath));
         }
     }
 
@@ -79,9 +94,9 @@ class ProcessStockOpname extends Command
             $pdf = new Fpdi();
             $pageCount = $pdf->setSourceFile($fullPath);
 
-            $this->info("Split PDF {$filename} yang punya {$pageCount} halaman...");
+            $this->info("Split PDF {$filename} dengan {$pageCount} halaman...");
 
-            // Split PDF dan simpen ke scanned
+            // Split PDF dan simpan halaman ke to_process
             for ($page = 1; $page <= $pageCount; $page++) {
                 $newPdf = new Fpdi();
                 $newPdf->AddPage();
@@ -90,26 +105,27 @@ class ProcessStockOpname extends Command
                 $newPdf->useTemplate($tplIdx);
 
                 $pageFilename = pathinfo($filename, PATHINFO_FILENAME) . "_hal{$page}.pdf";
-                $scannedPath = "{$this->scannedDir}/{$pageFilename}"; // Simpen ke scanned
-                $newPdf->Output($disk->path($scannedPath), 'F');
-
-                $this->info("Halaman {$page} disimpen ke: {$scannedPath}");
-
-                // Pindahin dari scanned ke to_process
                 $toProcessPath = "{$this->toProcessDir}/{$pageFilename}";
-                $disk->move($scannedPath, $toProcessPath);
-                $this->info("Halaman {$page} dipindah ke: {$toProcessPath}");
+                $newPdf->Output($disk->path($toProcessPath), 'F');
+
+                $this->info("Halaman {$page} disimpan ke: {$toProcessPath}");
 
                 // Proses file di to_process
                 $this->processSingleFile($toProcessPath, $disk->path($toProcessPath));
             }
 
-            // Pindahin PDF asli ke finished
-            $this->moveProcessedFileAndGetPath($filePath);
+            // Pindahkan PDF asli ke scanned
+            $this->moveToScanned($filePath);
             $disk->deleteDirectory($tempDir);
         } catch (\Exception $e) {
             $this->error("Gagal split PDF {$filename}: " . $e->getMessage());
-            $this->moveErrorFile($filePath, 'error_400');
+            \Illuminate\Support\Facades\Log::error("PDF Split Error for file {$filename}: {$e->getMessage()}");
+            // Cek apakah error adalah cURL timeout
+            if (strpos($e->getMessage(), 'cURL error 28') !== false) {
+                $this->moveErrorFile($filePath, 'error_timeout');
+            } else {
+                $this->moveErrorFile($filePath, $this->errorDir);
+            }
         }
     }
 
@@ -117,43 +133,85 @@ class ProcessStockOpname extends Command
     {
         $disk = Storage::disk('stock_opname');
 
-        // Kirim ke Verihubs OCR API
-        $response = Http::withHeaders([
-            'App-ID' => config('services.verihubs.app_id'),
-            'API-Key' => config('services.verihubs.api_key'),
-        ])
-            ->timeout(120)
-            ->attach('image', file_get_contents($fullPath), basename($fullPath))
-            ->post('https://api.verihubs.com/v2/ocr/stock_opname');
+        try {
+            // Kirim ke Verihubs OCR API
+            $response = Http::withHeaders([
+                'App-ID' => config('services.verihubs.app_id'),
+                'API-Key' => config('services.verihubs.api_key'),
+            ])
+                ->timeout(120)
+                ->attach('image', file_get_contents($fullPath), basename($fullPath))
+                ->post('https://api.verihubs.com/v2/ocr/stock_opname');
 
-        if ($response->failed()) {
-            $this->handleApiError($response, $filePath);
-            return;
-        }
-
-        $data = $response->json();
-        $this->info('API Response: ' . json_encode($data));
-
-        if (isset($data['data']['result_data']['forms'])) {
-            foreach ($data['data']['result_data']['forms'] as $form) {
-                $this->displayFormattedResult($form);
-                $newImagePath = $this->moveProcessedFileAndGetPath($filePath);
-                $this->saveToDatabase($data['data'], $form, $newImagePath);
+            if ($response->failed()) {
+                $this->handleApiError($response, $filePath);
+                return;
             }
-        } else {
-            $this->error("Result data not found in response for {$filePath}.");
+
+            $data = $response->json();
+            $this->info('API Response: ' . json_encode($data));
+
+            if (isset($data['data']['result_data']['forms'])) {
+                foreach ($data['data']['result_data']['forms'] as $form) {
+                    $this->displayFormattedResult($form);
+                    $this->saveToDatabase($data['data'], $form, $filePath);
+                    // Pindahkan ke finished setelah sukses
+                    $this->moveProcessedFile($filePath, $this->processedDir);
+                }
+            } else {
+                $this->error("Result data not found in response for {$filePath}.");
+                \Illuminate\Support\Facades\Log::error("No result data for file {$filePath}");
+                // Pindahkan ke rejected jika tidak ada result data
+                $this->moveProcessedFile($filePath, $this->rejectedDir);
+            }
+        } catch (\Exception $e) {
+            $this->error("Error processing file {$filePath}: " . $e->getMessage());
+            \Illuminate\Support\Facades\Log::error("Error processing file {$filePath}: {$e->getMessage()}");
+            // Cek apakah error adalah cURL timeout
+            if (strpos($e->getMessage(), 'cURL error 28') !== false) {
+                $this->moveErrorFile($filePath, 'error_timeout');
+            } else {
+                $this->moveErrorFile($filePath, $this->errorDir);
+            }
         }
     }
 
-    private function moveProcessedFileAndGetPath($originalPath)
+    private function moveToScanned($filePath)
     {
-        $filename = pathinfo($originalPath, PATHINFO_BASENAME);
-        $newPath = $this->processedDir . '/' . $filename;
-        
-        Storage::disk('stock_opname')->move($originalPath, $newPath);
-        $this->line("<fg=magenta>♻️ File dipindah ke:</> {$newPath}");
-        
+        $disk = Storage::disk('stock_opname');
+        $filename = pathinfo($filePath, PATHINFO_BASENAME);
+        $newPath = $this->scannedDir . '/' . $filename;
+
+        $disk->move($filePath, $newPath);
+        $this->line("<fg=magenta>♻️ File asli dipindah ke:</> {$newPath}");
         return $newPath;
+    }
+
+    private function moveToProcess($filePath)
+    {
+        $disk = Storage::disk('stock_opname');
+        $filename = pathinfo($filePath, PATHINFO_BASENAME);
+        $newPath = $this->toProcessDir . '/' . $filename;
+
+        $disk->copy($filePath, $newPath);
+        $this->line("<fg=magenta>♻️ File disalin ke:</> {$newPath}");
+        return $newPath;
+    }
+
+    private function moveProcessedFile($filePath, $destinationDir)
+    {
+        $disk = Storage::disk('stock_opname');
+        $filename = pathinfo($filePath, PATHINFO_BASENAME);
+        $newPath = $destinationDir . '/' . $filename;
+
+        $disk->move($filePath, $newPath);
+        $this->line("<fg=magenta>♻️ File dipindah ke:</> {$newPath}");
+        return $newPath;
+    }
+
+    private function moveErrorFile($filePath, $errorDir)
+    {
+        $this->moveProcessedFile($filePath, $errorDir);
     }
 
     private function handleApiError($response, $filePath)
@@ -162,21 +220,17 @@ class ProcessStockOpname extends Command
         $error = $response->json();
 
         $this->error("API Error [{$status}]: " . ($error['message'] ?? 'Unknown error'));
-        
-        if (in_array($status, [400, 401, 500])) {
-            $this->moveErrorFile($filePath, "error_{$status}");
-        }
-    }
+        \Illuminate\Support\Facades\Log::error("API Error [{$status}] for file {$filePath}: " . ($error['message'] ?? 'Unknown error'));
 
-    private function moveErrorFile($originalPath, $errorType)
-    {
-        $disk = Storage::disk('stock_opname');
-        $disk->makeDirectory($errorType);
-        $filename = pathinfo($originalPath, PATHINFO_BASENAME);
-        $newPath = $errorType . '/' . $filename;
-        
-        $disk->move($originalPath, $newPath);
-        $this->info("Moved error file to: {$newPath}");
+        // Tentukan folder error berdasarkan status kode
+        $errorDir = match ($status) {
+            400 => 'error_400', // Bad Request (misalnya, format file salah)
+            401 => 'error_401', // Unauthorized (misalnya, App-ID atau API-Key salah)
+            500 => 'error_500', // Internal Server Error
+            default => $this->errorDir, // Default ke folder error umum
+        };
+
+        $this->moveErrorFile($filePath, $errorDir);
     }
 
     private function displayFormattedResult($data)
