@@ -262,21 +262,21 @@ class ProcessStockOpname extends Command
     }
 
     private function saveToDatabase($data, $form, $imagePath)
-    {
-        StockOpnameResult::create([
-            'reference_id' => $data['reference_id'],
-            'tanggal' => \Carbon\Carbon::createFromFormat('d-m-Y', $form['tanggal']),
-            'jam' => $form['jam'],
-            'location' => $form['location'],
-            'warehouse' => $form['warehouse'],
-            'nomor_form' => $form['nomor_form'],
-            'nama_part' => $form['nama_part'],
-            'nomor_part' => $form['nomor_part'],
-            'satuan' => $form['satuan'],
-            'quantity_good' => (int) $form['quantity']['good'],
-            'quantity_reject' => $form['quantity']['reject'] === 'N/A' ? null : (int)$form['quantity']['reject'],
-            'quantity_repair' => $form['quantity']['repair'] === 'N/A' ? null : (int)$form['quantity']['repair'],
-            'image_path' => $imagePath,
-        ]);
-    }
+{
+    StockOpnameResult::create([
+        'reference_id' => $data['reference_id'],
+        'tanggal' => \Carbon\Carbon::createFromFormat('d-m-Y', $form['tanggal']),
+        'jam' => $form['jam'],
+        'location' => $form['location'],
+        'warehouse' => $form['warehouse'],
+        'nomor_form' => $form['nomor_form'],
+        'nama_part' => $form['nama_part'],
+        'nomor_part' => $form['nomor_part'],
+        'satuan' => $form['satuan'],
+        'quantity_good' => (int) $form['quantity']['good'],
+        'quantity_reject' => in_array($form['quantity']['reject'], ['N/A', '-']) ? null : (int)$form['quantity']['reject'],
+        'quantity_repair' => in_array($form['quantity']['repair'], ['N/A', '-']) ? null : (int)$form['quantity']['repair'],
+        'image_path' => $imagePath,
+    ]);
+}
 }

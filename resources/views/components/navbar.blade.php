@@ -7,7 +7,7 @@
       </ol> --}}
       <div class="row">
         <div class="col-2">
-      <img class="me-5" src="{{ url('https://upload.wikimedia.org/wikipedia/commons/thumb/7/7b/KYB_Corporation_company_logo.svg/135px-KYB_Corporation_company_logo.svg.png') }}" alt="">
+      <img class="me-5" src="{{ url('https://upload.wikimedia.org/wikipedia/commons/thumb/7/7b/KYB_Corporation_company_logo.svg/135px-KYB_Corporation_company_logo.svg.png') }}" alt="tes">
         </div>
         <div class="col-10 d-flex justify-content-center align-items-center">
           <h6 class="font-weight-bolder mb-0 fs-4">DASHBOARD MONITORING STOCK OPNAME</h6>
