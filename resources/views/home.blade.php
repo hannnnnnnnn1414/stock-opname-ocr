@@ -68,13 +68,11 @@
                   <form method="GET" action="{{ url('/home') }}" class="w-50" id="searchForm">
                     <div class="input-group">
                       <input type="text" 
-                            class="form-control form-control-sm" 
+                            class="form-control" 
                             name="search" 
                             placeholder="Search by Nomor Form, Nama Part, or Nomor Part"
                             value="{{ request('search') }}">
-                      <button class="btn btn-outline-primary btn-sm" type="submit">
-                        <i class="fas fa-search"></i>
-                      </button>
+                    <button class="btn btn-outline-primary" type="submit">Search</button>
                     </div>
                   </form>
                 </div>
