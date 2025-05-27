@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Cache;
 use setasign\Fpdi\Fpdi;
 use App\Models\StockOpnameResult;
 
@@ -13,74 +14,92 @@ class ProcessStockOpname extends Command
     protected $signature = 'stock-opname:process';
     protected $description = 'Process stock opname forms from directory';
 
-    protected $sourceDir = ''; // Root folder OCR_KYBI
+    protected $sourceDir = '';
     protected $processedDir = 'finished';
-    protected $scannedDir = 'scanned'; // Folder untuk file asli
-    protected $toProcessDir = 'to_process'; // Folder untuk halaman hasil split
-    protected $rejectedDir = 'rejected'; // Folder untuk file rejected
-    protected $errorDir = 'error'; // Folder untuk file error umum
+    protected $scannedDir = 'scanned';
+    protected $toProcessDir = 'to_process';
+    protected $rejectedDir = 'rejected';
+    protected $errorDir = 'error';
 
     public function handle()
     {
-        $disk = Storage::disk('stock_opname');
+        $lock = Cache::lock('stock-opname:process', 300);
 
-        // Pastikan semua folder ada
-        $disk->makeDirectory($this->sourceDir);
-        $disk->makeDirectory($this->processedDir);
-        $disk->makeDirectory($this->scannedDir);
-        $disk->makeDirectory($this->toProcessDir);
-        $disk->makeDirectory($this->rejectedDir);
-        $disk->makeDirectory($this->errorDir);
-        // Tambahkan folder untuk error spesifik
-        $disk->makeDirectory('error_400');
-        $disk->makeDirectory('error_401');
-        $disk->makeDirectory('error_500');
-        $disk->makeDirectory('error_timeout'); // Folder untuk cURL timeout
-
-        $files = $disk->files($this->sourceDir);
-
-        $this->info('Starting stock opname processing...');
-        $this->info('Verihubs Config: ' . json_encode(config('services.verihubs')));
-        $this->info('Storage Root: ' . $disk->path(''));
-        $this->info('Storage Path: ' . $disk->path($this->sourceDir));
-        $this->info('Files to process: ' . json_encode($files));
-
-        foreach ($files as $file) {
-            try {
-                $this->processFile($file);
-            } catch (\Exception $e) {
-                $this->error("Error processing file {$file}: " . $e->getMessage());
-                \Illuminate\Support\Facades\Log::error("General Error for file {$file}: {$e->getMessage()}");
-                // Cek apakah error adalah cURL timeout
-                if (strpos($e->getMessage(), 'cURL error 28') !== false) {
-                    $this->moveErrorFile($file, 'error_timeout');
-                } else {
-                    $this->moveErrorFile($file, $this->errorDir); // Error umum (misalnya, gagal split PDF)
-                }
-            }
+        if (!$lock->get()) {
+            $this->info('Another instance is running, exiting...');
+            \Illuminate\Support\Facades\Log::info('Process skipped due to existing lock at ' . now()->toDateTimeString());
+            return;
         }
 
-        $this->info('Processing completed.');
+        try {
+            $this->info('Process started at ' . now()->toDateTimeString() . ' (PID: ' . getmypid() . ')');
+            $disk = Storage::disk('stock_opname');
+
+            $disk->makeDirectory($this->sourceDir);
+            $disk->makeDirectory($this->processedDir);
+            $disk->makeDirectory($this->scannedDir);
+            $disk->makeDirectory($this->toProcessDir);
+            $disk->makeDirectory($this->rejectedDir);
+            $disk->makeDirectory($this->errorDir);
+            $disk->makeDirectory('error_400');
+            $disk->makeDirectory('error_401');
+            $disk->makeDirectory('error_500');
+            $disk->makeDirectory('error_timeout');
+
+            $files = $disk->files($this->sourceDir);
+
+            $this->info('Starting stock opname processing...');
+            $this->info('Verihubs Config: ' . json_encode(config('services.verihubs')));
+            $this->info('Storage Root: ' . $disk->path(''));
+            $this->info('Storage Path: ' . $disk->path($this->sourceDir));
+            $this->info('Files to process: ' . json_encode($files));
+
+            foreach ($files as $file) {
+                try {
+                    $this->processFile($file);
+                } catch (\Exception $e) {
+                    $this->error("Error processing file {$file}: " . $e->getMessage());
+                    \Illuminate\Support\Facades\Log::error("General Error for file {$file}: {$e->getMessage()}");
+                    if (strpos($e->getMessage(), 'cURL error 28') !== false) {
+                        $this->moveErrorFile($file, 'error_timeout');
+                    } else {
+                        $this->moveErrorFile($file, $this->errorDir);
+                    }
+                }
+            }
+
+            $this->info('Processing completed at ' . now()->toDateTimeString());
+        } finally {
+            $lock->release();
+        }
     }
 
-    private function processFile($filePath)
+    private function processFile(string $filePath)
     {
         $disk = Storage::disk('stock_opname');
-        $fullPath = $disk->path($filePath);
-        $filename = pathinfo($filePath, PATHINFO_BASENAME);
-        $extension = strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
+        $lock = Cache::lock('stock-opname:file:' . md5($filePath), 300);
 
-        $this->line("\n<fg=blue>🔍 Processing file:</> {$filePath}");
+        if (!$lock->get()) {
+            $this->info("File {$filePath} is being processed by another instance, skipping...");
+            \Illuminate\Support\Facades\Log::info("File {$filePath} skipped due to lock at " . now()->toDateTimeString());
+            return;
+        }
 
-        // Jika PDF, split dan pindahkan ke scanned serta halaman ke to_process
-        if ($extension === 'pdf') {
-            $this->processPdfFile($filePath, $fullPath, $filename);
-        } else {
-            // Pindahkan file asli ke scanned
-            $scannedPath = $this->moveToScanned($filePath);
-            // Proses file langsung di to_process
-            $toProcessPath = $this->moveToProcess($filePath);
-            $this->processSingleFile($toProcessPath, $disk->path($toProcessPath));
+        try {
+            $this->line("\n<fg=blue>🔍 Processing file:</> {$filePath}");
+            $fullPath = $disk->path($filePath);
+            $filename = pathinfo($filePath, PATHINFO_BASENAME);
+            $extension = strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
+
+            if ($extension === 'pdf') {
+                $this->processPdfFile($filePath, $fullPath, $filename);
+            } else {
+                $scannedPath = $this->moveToScanned($filePath);
+                $toProcessPath = $this->moveToProcess($filePath);
+                $this->processSingleFile($toProcessPath, $disk->path($toProcessPath));
+            }
+        } finally {
+            $lock->release();
         }
     }
 
