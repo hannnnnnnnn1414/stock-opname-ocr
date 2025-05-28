@@ -56,7 +56,11 @@ class ProcessStockOpname extends Command
 
             foreach ($files as $file) {
                 try {
+                    $startTime = microtime(true);
                     $this->processFile($file);
+                    $duration = microtime(true) - $startTime;
+                    $this->info("Total processing time for file {$file}: " . number_format($duration, 2) . " seconds");
+                    \Illuminate\Support\Facades\Log::info("Total processing time for file {$file}: " . number_format($duration, 2) . " seconds");
                 } catch (\Exception $e) {
                     $this->error("Error processing file {$file}: " . $e->getMessage());
                     \Illuminate\Support\Facades\Log::error("General Error for file {$file}: {$e->getMessage()}");
@@ -94,8 +98,18 @@ class ProcessStockOpname extends Command
             if ($extension === 'pdf') {
                 $this->processPdfFile($filePath, $fullPath, $filename);
             } else {
+                $startTime = microtime(true);
                 $scannedPath = $this->moveToScanned($filePath);
+                $duration = microtime(true) - $startTime;
+                $this->info("Move to scanned time for {$filePath}: " . number_format($duration, 2) . " seconds");
+                \Illuminate\Support\Facades\Log::info("Move to scanned time for {$filePath}: " . number_format($duration, 2) . " seconds");
+
+                $startTime = microtime(true);
                 $toProcessPath = $this->moveToProcess($filePath);
+                $duration = microtime(true) - $startTime;
+                $this->info("Move to process time for {$filePath}: " . number_format($duration, 2) . " seconds");
+                \Illuminate\Support\Facades\Log::info("Move to process time for {$filePath}: " . number_format($duration, 2) . " seconds");
+
                 $this->processSingleFile($toProcessPath, $disk->path($toProcessPath));
             }
         } finally {
@@ -110,13 +124,18 @@ class ProcessStockOpname extends Command
         $disk->makeDirectory($tempDir);
 
         try {
+            $startTime = microtime(true);
             $pdf = new Fpdi();
             $pageCount = $pdf->setSourceFile($fullPath);
+            $initDuration = microtime(true) - $startTime;
+            $this->info("PDF initialization time for {$filename}: " . number_format($initDuration, 2) . " seconds");
+            \Illuminate\Support\Facades\Log::info("PDF initialization time for {$filename}: " . number_format($initDuration, 2) . " seconds");
 
             $this->info("Split PDF {$filename} dengan {$pageCount} halaman...");
 
-            // Split PDF dan simpan halaman ke to_process
+            $totalSplitTime = 0;
             for ($page = 1; $page <= $pageCount; $page++) {
+                $startTime = microtime(true);
                 $newPdf = new Fpdi();
                 $newPdf->AddPage();
                 $newPdf->setSourceFile($fullPath);
@@ -126,20 +145,34 @@ class ProcessStockOpname extends Command
                 $pageFilename = pathinfo($filename, PATHINFO_FILENAME) . "_hal{$page}.pdf";
                 $toProcessPath = "{$this->toProcessDir}/{$pageFilename}";
                 $newPdf->Output($disk->path($toProcessPath), 'F');
+                $splitDuration = microtime(true) - $startTime;
+                $totalSplitTime += $splitDuration;
+
+                $this->info("Split page {$page} time for {$filename}: " . number_format($splitDuration, 2) . " seconds");
+                \Illuminate\Support\Facades\Log::info("Split page {$page} time for {$filename}: " . number_format($splitDuration, 2) . " seconds");
 
                 $this->info("Halaman {$page} disimpan ke: {$toProcessPath}");
 
-                // Proses file di to_process
                 $this->processSingleFile($toProcessPath, $disk->path($toProcessPath));
             }
 
-            // Pindahkan PDF asli ke scanned
-            $this->moveToScanned($filePath);
+            $this->info("Total split PDF time for {$filename}: " . number_format($totalSplitTime, 2) . " seconds");
+            \Illuminate\Support\Facades\Log::info("Total split PDF time for {$filename}: " . number_format($totalSplitTime, 2) . " seconds");
+
+            $startTime = microtime(true);
+            $scannedPath = $this->moveToScanned($filePath);
+            $duration = microtime(true) - $startTime;
+            $this->info("Move to scanned time for {$filename}: " . number_format($duration, 2) . " seconds");
+            \Illuminate\Support\Facades\Log::info("Move to scanned time for {$filename}: " . number_format($duration, 2) . " seconds");
+
+            $startTime = microtime(true);
             $disk->deleteDirectory($tempDir);
+            $duration = microtime(true) - $startTime;
+            $this->info("Delete temp directory time for {$filename}: " . number_format($duration, 2) . " seconds");
+            \Illuminate\Support\Facades\Log::info("Delete temp directory time for {$filename}: " . number_format($duration, 2) . " seconds");
         } catch (\Exception $e) {
             $this->error("Gagal split PDF {$filename}: " . $e->getMessage());
             \Illuminate\Support\Facades\Log::error("PDF Split Error for file {$filename}: {$e->getMessage()}");
-            // Cek apakah error adalah cURL timeout
             if (strpos($e->getMessage(), 'cURL error 28') !== false) {
                 $this->moveErrorFile($filePath, 'error_timeout');
             } else {
@@ -149,55 +182,81 @@ class ProcessStockOpname extends Command
     }
 
     private function processSingleFile($filePath, $fullPath)
-{
-    $disk = Storage::disk('stock_opname');
+    {
+        $disk = Storage::disk('stock_opname');
 
-    try {
-        // Kirim ke Verihubs OCR API
-        $response = Http::withHeaders([
-            'App-ID' => config('services.verihubs.app_id'),
-            'API-Key' => config('services.verihubs.api_key'),
-        ])
-            ->timeout(120)
-            ->attach('image', file_get_contents($fullPath), basename($fullPath))
-            ->post('https://api.verihubs.com/v2/ocr/stock_opname');
+        try {
+            $startTime = microtime(true);
+            $response = Http::withHeaders([
+                'App-ID' => config('services.verihubs.app_id'),
+                'API-Key' => config('services.verihubs.api_key'),
+            ])
+                ->timeout(120)
+                ->attach('image', file_get_contents($fullPath), basename($fullPath))
+                ->post('https://api.verihubs.com/v2/ocr/stock_opname');
+            $ocrDuration = microtime(true) - $startTime;
+            $this->info("OCR extraction time for {$filePath}: " . number_format($ocrDuration, 2) . " seconds");
+            \Illuminate\Support\Facades\Log::info("OCR extraction time for {$filePath}: " . number_format($ocrDuration, 2) . " seconds");
 
-        if ($response->failed()) {
-            $this->handleApiError($response, $filePath);
-            return;
-        }
-
-        $data = $response->json();
-        $this->info('API Response: ' . json_encode($data));
-
-        if (isset($data['data']['result_data']['forms'])) {
-            foreach ($data['data']['result_data']['forms'] as $form) {
-                $this->displayFormattedResult($form);
-                // Simpan ke database dengan path sementara
-                $this->saveToDatabase($data['data'], $form, $filePath);
-                // Pindahkan ke finished dan perbarui image_path
-                $newPath = $this->moveProcessedFile($filePath, $this->processedDir);
-                // Perbarui image_path di database
-                StockOpnameResult::where('image_path', $filePath)
-                    ->update(['image_path' => $newPath]);
+            if ($response->failed()) {
+                $this->handleApiError($response, $filePath);
+                return;
             }
-        } else {
-            $this->error("Result data not found in response for {$filePath}.");
-            \Illuminate\Support\Facades\Log::error("No result data for file {$filePath}");
-            // Pindahkan ke rejected
-            $newPath = $this->moveProcessedFile($filePath, $this->rejectedDir);
-        }
-    } catch (\Exception $e) {
-        $this->error("Error processing file {$filePath}: " . $e->getMessage());
-        \Illuminate\Support\Facades\Log::error("Error processing file {$filePath}: {$e->getMessage()}");
-        // Cek apakah error adalah cURL timeout
-        if (strpos($e->getMessage(), 'cURL error 28') !== false) {
-            $this->moveErrorFile($filePath, 'error_timeout');
-        } else {
-            $this->moveErrorFile($filePath, $this->errorDir);
+
+            $data = $response->json();
+            $this->info('API Response: ' . json_encode($data));
+
+            if (isset($data['data']['result_data']['forms'])) {
+                foreach ($data['data']['result_data']['forms'] as $form) {
+                    $this->displayFormattedResult($form);
+
+                    $startTime = microtime(true);
+                    $this->saveToDatabase($data['data'], $form, $filePath);
+                    $dbDuration = microtime(true) - $startTime;
+                    $this->info("Store to database time for {$filePath}: " . number_format($dbDuration, 2) . " seconds");
+                    \Illuminate\Support\Facades\Log::info("Store to database time for {$filePath}: " . number_format($dbDuration, 2) . " seconds");
+
+                    $startTime = microtime(true);
+                    $newPath = $this->moveProcessedFile($filePath, $this->processedDir);
+                    $moveDuration = microtime(true) - $startTime;
+                    $this->info("Move to finished time for {$filePath}: " . number_format($moveDuration, 2) . " seconds");
+                    \Illuminate\Support\Facades\Log::info("Move to finished time for {$filePath}: " . number_format($moveDuration, 2) . " seconds");
+
+                    $startTime = microtime(true);
+                    StockOpnameResult::where('image_path', $filePath)
+                        ->update(['image_path' => $newPath]);
+                    $updateDbDuration = microtime(true) - $startTime;
+                    $this->info("Update database image path time for {$filePath}: " . number_format($updateDbDuration, 2) . " seconds");
+                    \Illuminate\Support\Facades\Log::info("Update database image path time for {$filePath}: " . number_format($updateDbDuration, 2) . " seconds");
+                }
+            } else {
+                $this->error("Result data not found in response for {$filePath}.");
+                \Illuminate\Support\Facades\Log::error("No result data for file {$filePath}");
+
+                $startTime = microtime(true);
+                $newPath = $this->moveProcessedFile($filePath, $this->rejectedDir);
+                $moveDuration = microtime(true) - $startTime;
+                $this->info("Move to rejected time for {$filePath}: " . number_format($moveDuration, 2) . " seconds");
+                \Illuminate\Support\Facades\Log::info("Move to rejected time for {$filePath}: " . number_format($moveDuration, 2) . " seconds");
+            }
+        } catch (\Exception $e) {
+            $this->error("Error processing file {$filePath}: " . $e->getMessage());
+            \Illuminate\Support\Facades\Log::error("Error processing file {$filePath}: {$e->getMessage()}");
+            if (strpos($e->getMessage(), 'cURL error 28') !== false) {
+                $startTime = microtime(true);
+                $this->moveErrorFile($filePath, 'error_timeout');
+                $moveDuration = microtime(true) - $startTime;
+                $this->info("Move to error_timeout time for {$filePath}: " . number_format($moveDuration, 2) . " seconds");
+                \Illuminate\Support\Facades\Log::info("Move to error_timeout time for {$filePath}: " . number_format($moveDuration, 2) . " seconds");
+            } else {
+                $startTime = microtime(true);
+                $this->moveErrorFile($filePath, $this->errorDir);
+                $moveDuration = microtime(true) - $startTime;
+                $this->info("Move to error time for {$filePath}: " . number_format($moveDuration, 2) . " seconds");
+                \Illuminate\Support\Facades\Log::info("Move to error time for {$filePath}: " . number_format($moveDuration, 2) . " seconds");
+            }
         }
     }
-}
 
     private function moveToScanned($filePath)
     {
@@ -205,8 +264,12 @@ class ProcessStockOpname extends Command
         $filename = pathinfo($filePath, PATHINFO_BASENAME);
         $newPath = $this->scannedDir . '/' . $filename;
 
+        $startTime = microtime(true);
         $disk->move($filePath, $newPath);
+        $duration = microtime(true) - $startTime;
         $this->line("<fg=magenta>♻️ File asli dipindah ke:</> {$newPath}");
+        $this->info("Move to scanned time for {$filePath}: " . number_format($duration, 2) . " seconds");
+        \Illuminate\Support\Facades\Log::info("Move to scanned time for {$filePath}: " . number_format($duration, 2) . " seconds");
         return $newPath;
     }
 
@@ -216,8 +279,12 @@ class ProcessStockOpname extends Command
         $filename = pathinfo($filePath, PATHINFO_BASENAME);
         $newPath = $this->toProcessDir . '/' . $filename;
 
+        $startTime = microtime(true);
         $disk->copy($filePath, $newPath);
+        $duration = microtime(true) - $startTime;
         $this->line("<fg=magenta>♻️ File disalin ke:</> {$newPath}");
+        $this->info("Move to process time for {$filePath}: " . number_format($duration, 2) . " seconds");
+        \Illuminate\Support\Facades\Log::info("Move to process time for {$filePath}: " . number_format($duration, 2) . " seconds");
         return $newPath;
     }
 
@@ -227,8 +294,12 @@ class ProcessStockOpname extends Command
         $filename = pathinfo($filePath, PATHINFO_BASENAME);
         $newPath = $destinationDir . '/' . $filename;
 
+        $startTime = microtime(true);
         $disk->move($filePath, $newPath);
+        $duration = microtime(true) - $startTime;
         $this->line("<fg=magenta>♻️ File dipindah ke:</> {$newPath}");
+        $this->info("Move to {$destinationDir} time for {$filePath}: " . number_format($duration, 2) . " seconds");
+        \Illuminate\Support\Facades\Log::info("Move to {$destinationDir} time for {$filePath}: " . number_format($duration, 2) . " seconds");
         return $newPath;
     }
 
@@ -245,15 +316,18 @@ class ProcessStockOpname extends Command
         $this->error("API Error [{$status}]: " . ($error['message'] ?? 'Unknown error'));
         \Illuminate\Support\Facades\Log::error("API Error [{$status}] for file {$filePath}: " . ($error['message'] ?? 'Unknown error'));
 
-        // Tentukan folder error berdasarkan status kode
         $errorDir = match ($status) {
-            400 => 'error_400', // Bad Request (misalnya, format file salah)
-            401 => 'error_401', // Unauthorized (misalnya, App-ID atau API-Key salah)
-            500 => 'error_500', // Internal Server Error
-            default => $this->errorDir, // Default ke folder error umum
+            400 => 'error_400',
+            401 => 'error_401',
+            500 => 'error_500',
+            default => $this->errorDir,
         };
 
+        $startTime = microtime(true);
         $this->moveErrorFile($filePath, $errorDir);
+        $duration = microtime(true) - $startTime;
+        $this->info("Move to {$errorDir} time for {$filePath}: " . number_format($duration, 2) . " seconds");
+        \Illuminate\Support\Facades\Log::info("Move to {$errorDir} time for {$filePath}: " . number_format($duration, 2) . " seconds");
     }
 
     private function displayFormattedResult($data)
@@ -281,21 +355,25 @@ class ProcessStockOpname extends Command
     }
 
     private function saveToDatabase($data, $form, $imagePath)
-{
-    StockOpnameResult::create([
-        'reference_id' => $data['reference_id'],
-        'tanggal' => \Carbon\Carbon::createFromFormat('d-m-Y', $form['tanggal']),
-        'jam' => $form['jam'],
-        'location' => $form['location'],
-        'warehouse' => $form['warehouse'],
-        'nomor_form' => $form['nomor_form'],
-        'nama_part' => $form['nama_part'],
-        'nomor_part' => $form['nomor_part'],
-        'satuan' => $form['satuan'],
-        'quantity_good' => (int) $form['quantity']['good'],
-        'quantity_reject' => in_array($form['quantity']['reject'], ['N/A', '-']) ? null : (int)$form['quantity']['reject'],
-        'quantity_repair' => in_array($form['quantity']['repair'], ['N/A', '-']) ? null : (int)$form['quantity']['repair'],
-        'image_path' => $imagePath,
-    ]);
-}
+    {
+        $startTime = microtime(true);
+        StockOpnameResult::create([
+            'reference_id' => $data['reference_id'],
+            'tanggal' => \Carbon\Carbon::createFromFormat('d-m-Y', $form['tanggal']),
+            'jam' => $form['jam'],
+            'location' => $form['location'],
+            'warehouse' => $form['warehouse'],
+            'nomor_form' => $form['nomor_form'],
+            'nama_part' => $form['nama_part'],
+            'nomor_part' => $form['nomor_part'],
+            'satuan' => $form['satuan'],
+            'quantity_good' => (int) $form['quantity']['good'],
+            'quantity_reject' => in_array($form['quantity']['reject'], ['N/A', '-']) ? null : (int)$form['quantity']['reject'],
+            'quantity_repair' => in_array($form['quantity']['repair'], ['N/A', '-']) ? null : (int)$form['quantity']['repair'],
+            'image_path' => $imagePath,
+        ]);
+        $duration = microtime(true) - $startTime;
+        $this->info("Store to database time for {$imagePath}: " . number_format($duration, 2) . " seconds");
+        \Illuminate\Support\Facades\Log::info("Store to database time for {$imagePath}: " . number_format($duration, 2) . " seconds");
+    }
 }
