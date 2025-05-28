@@ -8,6 +8,9 @@ use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Cache;
 use setasign\Fpdi\Fpdi;
 use App\Models\StockOpnameResult;
+use GuzzleHttp\Client;
+use GuzzleHttp\Pool;
+use GuzzleHttp\Psr7\Request;
 
 class ProcessStockOpname extends Command
 {
@@ -118,68 +121,139 @@ class ProcessStockOpname extends Command
     }
 
     private function processPdfFile($filePath, $fullPath, $filename)
-    {
-        $disk = Storage::disk('stock_opname');
-        $tempDir = 'temp_pages';
-        $disk->makeDirectory($tempDir);
+{
+    $disk = Storage::disk('stock_opname');
+    $tempDir = 'temp_pages';
+    $disk->makeDirectory($tempDir);
 
-        try {
+    try {
+        $startTime = microtime(true);
+        $pdf = new Fpdi();
+        $pageCount = $pdf->setSourceFile($fullPath);
+        $initDuration = microtime(true) - $startTime;
+        $this->info("PDF initialization time for {$filename}: " . number_format($initDuration, 2) . " seconds");
+        \Illuminate\Support\Facades\Log::info("PDF initialization time for {$filename}: " . number_format($initDuration, 2) . " seconds");
+
+        $this->info("Split PDF {$filename} dengan {$pageCount} halaman...");
+        $toProcessFiles = [];
+        $totalSplitTime = 0;
+
+        for ($page = 1; $page <= $pageCount; $page++) {
             $startTime = microtime(true);
-            $pdf = new Fpdi();
-            $pageCount = $pdf->setSourceFile($fullPath);
-            $initDuration = microtime(true) - $startTime;
-            $this->info("PDF initialization time for {$filename}: " . number_format($initDuration, 2) . " seconds");
-            \Illuminate\Support\Facades\Log::info("PDF initialization time for {$filename}: " . number_format($initDuration, 2) . " seconds");
+            $newPdf = new Fpdi();
+            $newPdf->AddPage();
+            $newPdf->setSourceFile($fullPath);
+            $tplIdx = $newPdf->importPage($page);
+            $newPdf->useTemplate($tplIdx);
 
-            $this->info("Split PDF {$filename} dengan {$pageCount} halaman...");
+            $pageFilename = pathinfo($filename, PATHINFO_FILENAME) . "_hal{$page}.pdf";
+            $toProcessPath = "{$this->toProcessDir}/{$pageFilename}";
+            $newPdf->Output($disk->path($toProcessPath), 'F');
+            $toProcessFiles[] = ['path' => $toProcessPath, 'fullPath' => $disk->path($toProcessPath)];
+            $splitDuration = microtime(true) - $startTime;
+            $totalSplitTime += $splitDuration;
 
-            $totalSplitTime = 0;
-            for ($page = 1; $page <= $pageCount; $page++) {
-                $startTime = microtime(true);
-                $newPdf = new Fpdi();
-                $newPdf->AddPage();
-                $newPdf->setSourceFile($fullPath);
-                $tplIdx = $newPdf->importPage($page);
-                $newPdf->useTemplate($tplIdx);
-
-                $pageFilename = pathinfo($filename, PATHINFO_FILENAME) . "_hal{$page}.pdf";
-                $toProcessPath = "{$this->toProcessDir}/{$pageFilename}";
-                $newPdf->Output($disk->path($toProcessPath), 'F');
-                $splitDuration = microtime(true) - $startTime;
-                $totalSplitTime += $splitDuration;
-
-                $this->info("Split page {$page} time for {$filename}: " . number_format($splitDuration, 2) . " seconds");
-                \Illuminate\Support\Facades\Log::info("Split page {$page} time for {$filename}: " . number_format($splitDuration, 2) . " seconds");
-
-                $this->info("Halaman {$page} disimpan ke: {$toProcessPath}");
-
-                $this->processSingleFile($toProcessPath, $disk->path($toProcessPath));
-            }
-
-            $this->info("Total split PDF time for {$filename}: " . number_format($totalSplitTime, 2) . " seconds");
-            \Illuminate\Support\Facades\Log::info("Total split PDF time for {$filename}: " . number_format($totalSplitTime, 2) . " seconds");
-
-            $startTime = microtime(true);
-            $scannedPath = $this->moveToScanned($filePath);
-            $duration = microtime(true) - $startTime;
-            $this->info("Move to scanned time for {$filename}: " . number_format($duration, 2) . " seconds");
-            \Illuminate\Support\Facades\Log::info("Move to scanned time for {$filename}: " . number_format($duration, 2) . " seconds");
-
-            $startTime = microtime(true);
-            $disk->deleteDirectory($tempDir);
-            $duration = microtime(true) - $startTime;
-            $this->info("Delete temp directory time for {$filename}: " . number_format($duration, 2) . " seconds");
-            \Illuminate\Support\Facades\Log::info("Delete temp directory time for {$filename}: " . number_format($duration, 2) . " seconds");
-        } catch (\Exception $e) {
-            $this->error("Gagal split PDF {$filename}: " . $e->getMessage());
-            \Illuminate\Support\Facades\Log::error("PDF Split Error for file {$filename}: {$e->getMessage()}");
-            if (strpos($e->getMessage(), 'cURL error 28') !== false) {
-                $this->moveErrorFile($filePath, 'error_timeout');
-            } else {
-                $this->moveErrorFile($filePath, $this->errorDir);
-            }
+            $this->info("Split page {$page} time for {$filename}: " . number_format($splitDuration, 2) . " seconds");
+            \Illuminate\Support\Facades\Log::info("Split page {$page} time for {$filename}: " . number_format($splitDuration, 2) . " seconds");
         }
+
+        // Proses paralel
+        $client = new Client(['timeout' => 120, 'connect_timeout' => 10]);
+        $requests = function ($files) use ($client) {
+            foreach ($files as $file) {
+                yield function () use ($client, $file) {
+                    return $client->requestAsync('POST', 'https://api.verihubs.com/v2/ocr/stock_opname', [
+                        'headers' => [
+                            'App-ID' => config('services.verihubs.app_id'),
+                            'API-Key' => config('services.verihubs.api_key'),
+                        ],
+                        'multipart' => [
+                            [
+                                'name' => 'image',
+                                'contents' => fopen($file['fullPath'], 'r'),
+                                'filename' => basename($file['fullPath']),
+                            ],
+                        ],
+                    ]);
+                };
+            }
+        };
+
+        $pool = new Pool($client, $requests($toProcessFiles), [
+            'concurrency' => 5,
+            'fulfilled' => function ($response, $index) use ($toProcessFiles, $disk) {
+                $filePath = $toProcessFiles[$index]['path'];
+                $data = json_decode($response->getBody(), true);
+                $this->info('API Response for ' . $filePath . ': ' . json_encode($data));
+
+                if (isset($data['data']['result_data']['forms'])) {
+                    $newPath = null;
+                    foreach ($data['data']['result_data']['forms'] as $form) {
+                        $this->displayFormattedResult($form);
+                        $startTime = microtime(true);
+                        $this->saveToDatabase($data['data'], $form, $filePath);
+                        $dbDuration = microtime(true) - $startTime;
+                        $this->info("Store to database time for {$filePath}: " . number_format($dbDuration, 2) . " seconds");
+                        \Illuminate\Support\Facades\Log::info("Store to database time for {$filePath}: " . number_format($dbDuration, 2) . " seconds");
+                    }
+                    $startTime = microtime(true);
+                    $newPath = $this->moveProcessedFile($filePath, $this->processedDir);
+                    $moveDuration = microtime(true) - $startTime;
+                    $this->info("Move to finished time for {$filePath}: " . number_format($moveDuration, 2) . " seconds");
+                    \Illuminate\Support\Facades\Log::info("Move to finished time for {$filePath}: " . number_format($moveDuration, 2) . " seconds");
+
+                    $startTime = microtime(true);
+                    StockOpnameResult::where('image_path', $filePath)
+                        ->update(['image_path' => $newPath]);
+                    $updateDbDuration = microtime(true) - $startTime;
+                    $this->info("Update database image path time for {$filePath}: " . number_format($updateDbDuration, 2) . " seconds");
+                    \Illuminate\Support\Facades\Log::info("Update database image path time for {$filePath}: " . number_format($updateDbDuration, 2) . " seconds");
+                } else {
+                    $this->error("Result data not found in response for {$filePath}.");
+                    \Illuminate\Support\Facades\Log::error("No result data for file {$filePath}");
+                    $startTime = microtime(true);
+                    $newPath = $this->moveProcessedFile($filePath, $this->rejectedDir);
+                    $moveDuration = microtime(true) - $startTime;
+                    $this->info("Move to rejected time for {$filePath}: " . number_format($moveDuration, 2) . " seconds");
+                    \Illuminate\Support\Facades\Log::info("Move to rejected time for {$filePath}: " . number_format($moveDuration, 2) . " seconds");
+                }
+            },
+            'rejected' => function ($reason, $index) use ($toProcessFiles) {
+                $filePath = $toProcessFiles[$index]['path'];
+                $this->error("Error processing file {$filePath}: " . $reason->getMessage());
+                \Illuminate\Support\Facades\Log::error("Error processing file {$filePath}: {$reason->getMessage()}");
+                $errorDir = strpos($reason->getMessage(), 'cURL error 28') !== false ? 'error_timeout' : $this->errorDir;
+                $startTime = microtime(true);
+                $this->moveErrorFile($filePath, $errorDir);
+                $moveDuration = microtime(true) - $startTime;
+                $this->info("Move to {$errorDir} time for {$filePath}: " . number_format($moveDuration, 2) . " seconds");
+                \Illuminate\Support\Facades\Log::info("Move to {$errorDir} time for {$filePath}: " . number_format($moveDuration, 2) . " seconds");
+            },
+        ]);
+
+        $pool->promise()->wait();
+
+        $this->info("Total split PDF time for {$filename}: " . number_format($totalSplitTime, 2) . " seconds");
+        \Illuminate\Support\Facades\Log::info("Total split PDF time for {$filename}: " . number_format($totalSplitTime, 2) . " seconds");
+
+        $startTime = microtime(true);
+        $scannedPath = $this->moveToScanned($filePath);
+        $duration = microtime(true) - $startTime;
+        $this->info("Move to scanned time for {$filename}: " . number_format($duration, 2) . " seconds");
+        \Illuminate\Support\Facades\Log::info("Move to scanned time for {$filename}: " . number_format($duration, 2) . " seconds");
+
+        $startTime = microtime(true);
+        $disk->deleteDirectory($tempDir);
+        $duration = microtime(true) - $startTime;
+        $this->info("Delete temp directory time for {$filename}: " . number_format($duration, 2) . " seconds");
+        \Illuminate\Support\Facades\Log::info("Delete temp directory time for {$filename}: " . number_format($duration, 2) . " seconds");
+    } catch (\Exception $e) {
+        $this->error("Gagal split PDF {$filename}: " . $e->getMessage());
+        \Illuminate\Support\Facades\Log::error("PDF Split Error for file {$filename}: {$e->getMessage()}");
+        $errorDir = strpos($e->getMessage(), 'cURL error 28') !== false ? 'error_timeout' : $this->errorDir;
+        $this->moveErrorFile($filePath, $errorDir);
     }
+}
 
     private function processSingleFile($filePath, $fullPath)
     {
