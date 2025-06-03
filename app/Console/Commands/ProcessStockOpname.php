@@ -405,49 +405,59 @@ class ProcessStockOpname extends Command
     }
 
     private function displayFormattedResult($data)
-    {
-        $this->line("<fg=green>✅ Successfully processed:</>");
+{
+    $this->line("<fg=green>✅ Successfully processed:</>");
 
-        $this->line("<fg=cyan>┌──────────────────────────────</>");
-        $this->line("<fg=cyan>│</> <fg=yellow>📅 Tanggal:</>      {$data['tanggal']}");
-        $this->line("<fg=cyan>│</> <fg=yellow>⏰ Jam:</>          {$data['jam']}");
-        $this->line("<fg=cyan>│</> <fg=yellow>📍 Lokasi:</>       {$data['location']}");
-        $this->line("<fg=cyan>│</> <fg=yellow>📦 Gudang:</>       {$data['warehouse']}");
-        $this->line("<fg=cyan>├──────────────────────────────</>");
-
-        $this->line("<fg=cyan>│</> <fg=yellow>📝 Nomor Form:</>   {$data['nomor_form']}");
-        $this->line("<fg=cyan>│</> <fg=yellow>🔧 Nama Part:</>    {$data['nama_part']}");
-        $this->line("<fg=cyan>│</> <fg=yellow>🔢 Nomor Part:</>   {$data['nomor_part']}");
-        $this->line("<fg=cyan>│</> <fg=yellow>📏 Satuan:</>       {$data['satuan']}");
-        $this->line("<fg=cyan>├──────────────────────────────</>");
-
-        $this->line("<fg=cyan>│</> <fg=yellow>📊 Kuantitas:</>");
-        $this->line("<fg=cyan>│</>   - Baik:     {$data['quantity']['good']}");
-        $this->line("<fg=cyan>│</>   - Reject:   {$data['quantity']['reject']}");
-        $this->line("<fg=cyan>│</>   - Repair:   {$data['quantity']['repair']}");
-        $this->line("<fg=cyan>└──────────────────────────────</>\n");
-    }
+    $this->line("<fg=cyan>┌──────────────────────────────</>");
+    $this->line("<fg=cyan>│</> <fg=yellow>📅 Tanggal:</>      {$data['tanggal']}");
+    $this->line("<fg=cyan>│</> <fg=yellow>⏰ Jam:</>          {$data['jam']}");
+    $this->line("<fg=cyan>│</> <fg=yellow>📍 Lokasi:</>       {$data['location']}");
+    $this->line("<fg=cyan>│</> <fg=yellow>📦 Gudang:</>       {$data['warehouse']}");
+    $this->line("<fg=cyan>├──────────────────────────────</>");
+    $this->line("<fg=cyan>│</> <fg=yellow>📝 Nomor Form:</>   {$data['nomor_form']}");
+    $this->line("<fg=cyan>│</> <fg=yellow>🔧 Nama Part:</>    {$data['nama_part']}");
+    $this->line("<fg=cyan>│</> <fg=yellow>🔢 Nomor Part:</>   {$data['nomor_part']}");
+    $this->line("<fg=cyan>│</> <fg=yellow>📏 Satuan:</>       {$data['satuan']}");
+    $this->line("<fg=cyan>│</> <fg=yellow>🏷️ Tipe:</>         " . ($data['tipe'] ?? 'N/A'));
+    $this->line("<fg=cyan>│</> <fg=yellow>🌍 Zone:</>         " . ($data['zone'] ?? 'N/A'));
+    $this->line("<fg=cyan>│</> <fg=yellow>🔨 WIP Code:</>     " . ($data['wip_code'] ?? 'N/A'));
+    $this->line("<fg=cyan>├──────────────────────────────</>");
+    $this->line("<fg=cyan>│</> <fg=yellow>📊 Kuantitas:</>");
+    $this->line("<fg=cyan>│</>   - Baik:     {$data['quantity']['good']}");
+    $this->line("<fg=cyan>│</>   - Reject:   {$data['quantity']['reject']}");
+    $this->line("<fg=cyan>│</>   - Repair:   {$data['quantity']['repair']}");
+    $this->line("<fg=cyan>└──────────────────────────────</>\n");
+}
 
     private function saveToDatabase($data, $form, $imagePath)
-    {
-        $startTime = microtime(true);
-        StockOpnameResult::create([
-            'reference_id' => $data['reference_id'],
-            'tanggal' => \Carbon\Carbon::createFromFormat('d-m-Y', $form['tanggal']),
-            'jam' => $form['jam'],
-            'location' => $form['location'],
-            'warehouse' => $form['warehouse'],
-            'nomor_form' => $form['nomor_form'],
-            'nama_part' => $form['nama_part'],
-            'nomor_part' => $form['nomor_part'],
-            'satuan' => $form['satuan'],
-            'quantity_good' => (int) $form['quantity']['good'],
-            'quantity_reject' => in_array($form['quantity']['reject'], ['N/A', '-']) ? null : (int)$form['quantity']['reject'],
-            'quantity_repair' => in_array($form['quantity']['repair'], ['N/A', '-']) ? null : (int)$form['quantity']['repair'],
-            'image_path' => $imagePath,
-        ]);
-        $duration = microtime(true) - $startTime;
-        $this->info("Store to database time for {$imagePath}: " . number_format($duration, 2) . " seconds");
-        \Illuminate\Support\Facades\Log::info("Store to database time for {$imagePath}: " . number_format($duration, 2) . " seconds");
-    }
+{
+    $startTime = microtime(true);
+    
+    $quantityGood = isset($form['quantity']['good']) ? str_replace(',', '.', $form['quantity']['good']) : null;
+    $quantityReject = isset($form['quantity']['reject']) ? str_replace(',', '.', $form['quantity']['reject']) : null;
+    $quantityRepair = isset($form['quantity']['repair']) ? str_replace(',', '.', $form['quantity']['repair']) : null;
+
+    StockOpnameResult::create([
+        'reference_id' => $data['reference_id'],
+        'tanggal' => \Carbon\Carbon::createFromFormat('d-m-Y', $form['tanggal']),
+        'jam' => $form['jam'],
+        'location' => $form['location'],
+        'warehouse' => $form['warehouse'],
+        'nomor_form' => $form['nomor_form'],
+        'nama_part' => $form['nama_part'],
+        'nomor_part' => $form['nomor_part'],
+        'satuan' => $form['satuan'],
+        'tipe' => isset($form['tipe']) ? $form['tipe'] : null,
+        'zone' => isset($form['zone']) ? $form['zone'] : null,
+        'wip_code' => isset($form['wip_code']) ? $form['wip_code'] : null,
+        'quantity_good' => is_numeric($quantityGood) ? (float) $quantityGood : null,
+        'quantity_reject' => in_array($form['quantity']['reject'], ['N/A', '-']) ? null : ($quantityReject && is_numeric($quantityReject) ? (float) $quantityReject : null),
+        'quantity_repair' => in_array($form['quantity']['repair'], ['N/A', '-']) ? null : ($quantityRepair && is_numeric($quantityRepair) ? (float) $quantityRepair : null),
+        'image_path' => $imagePath,
+    ]);
+    
+    $duration = microtime(true) - $startTime;
+    $this->info("Waktu menyimpan ke database untuk {$imagePath}: " . number_format($duration, 2) . " detik");
+    \Illuminate\Support\Facades\Log::info("Waktu menyimpan ke database untuk {$imagePath}: " . number_format($duration, 2) . " detik");
+}
 }
