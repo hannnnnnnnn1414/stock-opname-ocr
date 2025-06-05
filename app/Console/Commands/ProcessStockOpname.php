@@ -134,6 +134,29 @@ class ProcessStockOpname extends Command
         $this->info("PDF initialization time for {$filename}: " . number_format($initDuration, 2) . " seconds");
         \Illuminate\Support\Facades\Log::info("PDF initialization time for {$filename}: " . number_format($initDuration, 2) . " seconds");
 
+        // Jika hanya 1 halaman, proses langsung tanpa split
+        if ($pageCount === 1) {
+            $this->info("PDF {$filename} hanya memiliki 1 halaman, memproses langsung...");
+            \Illuminate\Support\Facades\Log::info("PDF {$filename} hanya memiliki 1 halaman, memproses langsung...");
+
+            $startTime = microtime(true);
+            $scannedPath = $this->moveToScanned($filePath);
+            $duration = microtime(true) - $startTime;
+            $this->info("Move to scanned time for {$filename}: " . number_format($duration, 2) . " seconds");
+            \Illuminate\Support\Facades\Log::info("Move to scanned time for {$filename}: " . number_format($duration, 2) . " seconds");
+
+            // Gunakan $scannedPath untuk processSingleFile
+            $this->processSingleFile($scannedPath, $disk->path($scannedPath));
+
+            $startTime = microtime(true);
+            $disk->deleteDirectory($tempDir);
+            $duration = microtime(true) - $startTime;
+            $this->info("Delete temp directory time for {$filename}: " . number_format($duration, 2) . " seconds");
+            \Illuminate\Support\Facades\Log::info("Delete temp directory time for {$filename}: " . number_format($duration, 2) . " seconds");
+
+            return;
+        }
+
         $this->info("Split PDF {$filename} dengan {$pageCount} halaman...");
         $toProcessFiles = [];
         $totalSplitTime = 0;
