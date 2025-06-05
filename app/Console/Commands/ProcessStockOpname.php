@@ -433,6 +433,12 @@ class ProcessStockOpname extends Command
 {
     $startTime = microtime(true);
     
+    // Ambil nilai asli dari respon API
+    $quantityGoodRaw = $form['quantity']['good'] ?? null;
+    $quantityRejectRaw = $form['quantity']['reject'] ?? null;
+    $quantityRepairRaw = $form['quantity']['repair'] ?? null;
+
+    // Proses nilai asli menjadi float (seperti sebelumnya)
     $quantityGood = isset($form['quantity']['good']) ? str_replace(',', '.', $form['quantity']['good']) : null;
     $quantityReject = isset($form['quantity']['reject']) ? str_replace(',', '.', $form['quantity']['reject']) : null;
     $quantityRepair = isset($form['quantity']['repair']) ? str_replace(',', '.', $form['quantity']['repair']) : null;
@@ -450,9 +456,12 @@ class ProcessStockOpname extends Command
         'tipe' => isset($form['tipe']) ? $form['tipe'] : null,
         'zone' => isset($form['zone']) ? $form['zone'] : null,
         'wip_code' => isset($form['wip_code']) ? $form['wip_code'] : null,
+        'quantity_good_raw' => $quantityGoodRaw, // Nilai asli
         'quantity_good' => is_numeric($quantityGood) ? (float) $quantityGood : null,
-        'quantity_reject' => in_array($form['quantity']['reject'], ['N/A', '-']) ? null : ($quantityReject && is_numeric($quantityReject) ? (float) $quantityReject : null),
-        'quantity_repair' => in_array($form['quantity']['repair'], ['N/A', '-']) ? null : ($quantityRepair && is_numeric($quantityRepair) ? (float) $quantityRepair : null),
+        'quantity_reject_raw' => $quantityRejectRaw, // Nilai asli
+        'quantity_reject' => in_array($form['quantity']['reject'], ['N/A', '-']) ? 'N/A' : ($quantityReject && is_numeric($quantityReject) ? (float) $quantityReject : null),
+        'quantity_repair_raw' => $quantityRepairRaw, // Nilai asli
+        'quantity_repair' => in_array($form['quantity']['repair'], ['N/A', '-']) ? 'N/A' : ($quantityRepair && is_numeric($quantityRepair) ? (float) $quantityRepair : null),
         'image_path' => $imagePath,
     ]);
     

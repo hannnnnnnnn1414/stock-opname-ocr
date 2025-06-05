@@ -19,9 +19,13 @@ class CreateStockOpnameResultsTable extends Migration
             $table->string('nama_part');
             $table->string('nomor_part');
             $table->string('satuan');
-            $table->integer('quantity_good');
-            $table->integer('quantity_reject')->nullable();
-            $table->integer('quantity_repair')->nullable();
+            $table->string('quantity_good_raw')->nullable();
+            $table->string('quantity_good')->nullable();
+            $table->string('quantity_reject_raw')->nullable();
+            $table->string('quantity_reject')->nullable();
+            $table->string('quantity_repair_raw')->nullable();
+            $table->string('quantity_repair')->nullable();
+            $table->string('status')->nullable();
             $table->timestamps();
         });
     }

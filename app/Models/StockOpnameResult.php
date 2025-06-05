@@ -22,8 +22,11 @@ class StockOpnameResult extends Model
         'tipe', 
         'zone', 
         'wip_code',
+        'quantity_good_raw',
         'quantity_good',
+        'quantity_reject_raw',
         'quantity_reject',
+        'quantity_repair_raw',
         'quantity_repair',
         'image_path'
     ];

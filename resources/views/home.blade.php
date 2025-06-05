@@ -96,9 +96,13 @@
                     <th class="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Nama Part</th>
                     <th class="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Nomor Part</th>
                     <th class="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Satuan</th>
+                    <th class="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Quantity Good Raw</th>
                     <th class="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Quantity Good</th>
+                    <th class="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Quantity Reject Raw</th>
                     <th class="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Quantity Reject</th>
+                    <th class="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Quantity Repair Raw</th>
                     <th class="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Quantity Repair</th>
+                    <th class="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Status</th>
                     <th class="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Gambar</th>
                   </tr>
                 </thead>
@@ -113,9 +117,13 @@
                     <td>{{ $result->nama_part }}</td>
                     <td>{{ $result->nomor_part }}</td>
                     <td>{{ $result->satuan }}</td>
+                    <td>{{ $result->quantity_good_raw }}</td>
                     <td>{{ $result->quantity_good }}</td>
+                    <td>{{ $result->quantity_reject_raw }}</td>
                     <td>{{ $result->quantity_reject }}</td>
+                    <td>{{ $result->quantity_repair_raw }}</td>
                     <td>{{ $result->quantity_repair }}</td>
+                    <td>{{ $result->status }}</td>
                     <td>
                       @if($result->image_path)
                           @if(Str::endsWith($result->image_path, '.pdf'))
