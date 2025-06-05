@@ -82,43 +82,51 @@ class ProcessStockOpname extends Command
     }
 
     private function processFile(string $filePath)
-    {
-        $disk = Storage::disk('stock_opname');
-        $lock = Cache::lock('stock-opname:file:' . md5($filePath), 300);
+{
+    $disk = Storage::disk('stock_opname');
+    $lock = Cache::lock('stock-opname:file:' . md5($filePath), 300);
 
-        if (!$lock->get()) {
-            $this->info("File {$filePath} is being processed by another instance, skipping...");
-            \Illuminate\Support\Facades\Log::info("File {$filePath} skipped due to lock at " . now()->toDateTimeString());
-            return;
-        }
-
-        try {
-            $this->line("\n<fg=blue>🔍 Processing file:</> {$filePath}");
-            $fullPath = $disk->path($filePath);
-            $filename = pathinfo($filePath, PATHINFO_BASENAME);
-            $extension = strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
-
-            if ($extension === 'pdf') {
-                $this->processPdfFile($filePath, $fullPath, $filename);
-            } else {
-                $startTime = microtime(true);
-                $scannedPath = $this->moveToScanned($filePath);
-                $duration = microtime(true) - $startTime;
-                $this->info("Move to scanned time for {$filePath}: " . number_format($duration, 2) . " seconds");
-                \Illuminate\Support\Facades\Log::info("Move to scanned time for {$filePath}: " . number_format($duration, 2) . " seconds");
-
-                $startTime = microtime(true);
-                $toProcessPath = $this->moveToProcess($filePath);
-                $duration = microtime(true) - $startTime;
-                $this->info("Move to process time for {$filePath}: " . number_format($duration, 2) . " seconds");
-                \Illuminate\Support\Facades\Log::info("Move to process time for {$filePath}: " . number_format($duration, 2) . " seconds");
-
-                $this->processSingleFile($toProcessPath, $disk->path($toProcessPath));
-            }
-        } finally {
-            $lock->release();
-        }
+    if (!$lock->get()) {
+        $this->info("File {$filePath} is being processed by another instance, skipping...");
+        \Illuminate\Support\Facades\Log::info("File {$filePath} skipped due to lock at " . now()->toDateTimeString());
+        return;
     }
+
+    try {
+        if (!$disk->exists($filePath)) {
+            throw new \Exception("File {$filePath} does not exist.");
+        }
+        $this->line("\n<fg=blue>🔍 Processing file:</> {$filePath}");
+        $fullPath = $disk->path($filePath);
+        $filename = pathinfo($filePath, PATHINFO_BASENAME);
+        $extension = strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
+
+        if ($extension === 'pdf') {
+            $this->processPdfFile($filePath, $fullPath, $filename);
+        } else {
+            $startTime = microtime(true);
+            $scannedPath = $this->moveToScanned($filePath);
+            $duration = microtime(true) - $startTime;
+            $this->info("Move to scanned time for {$filePath}: " . number_format($duration, 2) . " seconds");
+            \Illuminate\Support\Facades\Log::info("Move to scanned time for {$filePath}: " . number_format($duration, 2) . " seconds");
+
+            $startTime = microtime(true);
+            $toProcessPath = $this->moveToProcess($scannedPath); // Gunakan scannedPath
+            $duration = microtime(true) - $startTime;
+            $this->info("Move to process time for {$filePath}: " . number_format($duration, 2) . " seconds");
+            \Illuminate\Support\Facades\Log::info("Move to process time for {$filePath}: " . number_format($duration, 2) . " seconds");
+
+            $this->processSingleFile($toProcessPath, $disk->path($toProcessPath), 3);
+        }
+    } catch (\Exception $e) {
+        $this->error("Error processing file {$filePath}: " . $e->getMessage());
+        \Illuminate\Support\Facades\Log::error("General Error for file {$filePath}: {$e->getMessage()}");
+        $errorDir = strpos($e->getMessage(), 'cURL error 28') !== false ? 'error_timeout' : $this->errorDir;
+        $this->moveErrorFile($filePath, $errorDir);
+    } finally {
+        $lock->release();
+    }
+}
 
     private function processPdfFile($filePath, $fullPath, $filename)
 {
@@ -145,8 +153,7 @@ class ProcessStockOpname extends Command
             $this->info("Move to scanned time for {$filename}: " . number_format($duration, 2) . " seconds");
             \Illuminate\Support\Facades\Log::info("Move to scanned time for {$filename}: " . number_format($duration, 2) . " seconds");
 
-            // Gunakan $scannedPath untuk processSingleFile
-            $this->processSingleFile($scannedPath, $disk->path($scannedPath));
+            $this->processSingleFile($scannedPath, $disk->path($scannedPath), 3); // Eksplisit maxRetries
 
             $startTime = microtime(true);
             $disk->deleteDirectory($tempDir);
@@ -159,6 +166,7 @@ class ProcessStockOpname extends Command
 
         $this->info("Split PDF {$filename} dengan {$pageCount} halaman...");
         $toProcessFiles = [];
+        $failedFiles = []; // Inisialisasi
         $totalSplitTime = 0;
 
         for ($page = 1; $page <= $pageCount; $page++) {
@@ -241,10 +249,11 @@ class ProcessStockOpname extends Command
                     \Illuminate\Support\Facades\Log::info("Move to rejected time for {$filePath}: " . number_format($moveDuration, 2) . " seconds");
                 }
             },
-            'rejected' => function ($reason, $index) use ($toProcessFiles) {
+            'rejected' => function ($reason, $index) use ($toProcessFiles, &$failedFiles) {
                 $filePath = $toProcessFiles[$index]['path'];
                 $this->error("Error processing file {$filePath}: " . $reason->getMessage());
                 \Illuminate\Support\Facades\Log::error("Error processing file {$filePath}: {$reason->getMessage()}");
+                $failedFiles[] = $toProcessFiles[$index];
                 $errorDir = strpos($reason->getMessage(), 'cURL error 28') !== false ? 'error_timeout' : $this->errorDir;
                 $startTime = microtime(true);
                 $this->moveErrorFile($filePath, $errorDir);
@@ -255,6 +264,18 @@ class ProcessStockOpname extends Command
         ]);
 
         $pool->promise()->wait();
+
+        // Proses ulang file yang gagal
+        foreach ($failedFiles as $file) {
+            $this->info("Retrying failed file {$file['path']}");
+            \Illuminate\Support\Facades\Log::info("Retrying failed file {$file['path']}");
+            $this->processSingleFile($file['path'], $file['fullPath'], 3);
+        }
+
+        // Hapus file sementara
+        foreach ($toProcessFiles as $file) {
+            $disk->delete($file['path']);
+        }
 
         $this->info("Total split PDF time for {$filename}: " . number_format($totalSplitTime, 2) . " seconds");
         \Illuminate\Support\Facades\Log::info("Total split PDF time for {$filename}: " . number_format($totalSplitTime, 2) . " seconds");
@@ -278,11 +299,16 @@ class ProcessStockOpname extends Command
     }
 }
 
-    private function processSingleFile($filePath, $fullPath)
-    {
-        $disk = Storage::disk('stock_opname');
+    private function processSingleFile($filePath, $fullPath, $maxRetries = 3)
+{
+    $disk = Storage::disk('stock_opname');
+    $attempt = 1;
 
+    while ($attempt <= $maxRetries) {
         try {
+            $this->info("Attempt {$attempt} for file {$filePath}");
+            \Illuminate\Support\Facades\Log::info("Attempt {$attempt} for file {$filePath}");
+
             $startTime = microtime(true);
             $response = Http::withHeaders([
                 'App-ID' => config('services.verihubs.app_id'),
@@ -296,6 +322,13 @@ class ProcessStockOpname extends Command
             \Illuminate\Support\Facades\Log::info("OCR extraction time for {$filePath}: " . number_format($ocrDuration, 2) . " seconds");
 
             if ($response->failed()) {
+                if ($attempt < $maxRetries) {
+                    $this->info("API failed for {$filePath}, retrying... (Attempt {$attempt}/{$maxRetries})");
+                    \Illuminate\Support\Facades\Log::info("API failed for {$filePath}, retrying... (Attempt {$attempt}/{$maxRetries})");
+                    $attempt++;
+                    sleep(2); // Jeda sebelum retry
+                    continue;
+                }
                 $this->handleApiError($response, $filePath);
                 return;
             }
@@ -327,33 +360,38 @@ class ProcessStockOpname extends Command
                     \Illuminate\Support\Facades\Log::info("Update database image path time for {$filePath}: " . number_format($updateDbDuration, 2) . " seconds");
                 }
             } else {
+                if ($attempt < $maxRetries) {
+                    $this->info("No result data for {$filePath}, retrying... (Attempt {$attempt}/{$maxRetries})");
+                    \Illuminate\Support\Facades\Log::info("No result data for {$filePath}, retrying... (Attempt {$attempt}/{$maxRetries})");
+                    $attempt++;
+                    sleep(2); // Jeda sebelum retry
+                    continue;
+                }
                 $this->error("Result data not found in response for {$filePath}.");
                 \Illuminate\Support\Facades\Log::error("No result data for file {$filePath}");
-
                 $startTime = microtime(true);
                 $newPath = $this->moveProcessedFile($filePath, $this->rejectedDir);
                 $moveDuration = microtime(true) - $startTime;
                 $this->info("Move to rejected time for {$filePath}: " . number_format($moveDuration, 2) . " seconds");
                 \Illuminate\Support\Facades\Log::info("Move to rejected time for {$filePath}: " . number_format($moveDuration, 2) . " seconds");
             }
+            return; // Keluar dari loop jika sukses
         } catch (\Exception $e) {
-            $this->error("Error processing file {$filePath}: " . $e->getMessage());
-            \Illuminate\Support\Facades\Log::error("Error processing file {$filePath}: {$e->getMessage()}");
-            if (strpos($e->getMessage(), 'cURL error 28') !== false) {
-                $startTime = microtime(true);
-                $this->moveErrorFile($filePath, 'error_timeout');
-                $moveDuration = microtime(true) - $startTime;
-                $this->info("Move to error_timeout time for {$filePath}: " . number_format($moveDuration, 2) . " seconds");
-                \Illuminate\Support\Facades\Log::info("Move to error_timeout time for {$filePath}: " . number_format($moveDuration, 2) . " seconds");
-            } else {
-                $startTime = microtime(true);
-                $this->moveErrorFile($filePath, $this->errorDir);
-                $moveDuration = microtime(true) - $startTime;
-                $this->info("Move to error time for {$filePath}: " . number_format($moveDuration, 2) . " seconds");
-                \Illuminate\Support\Facades\Log::info("Move to error time for {$filePath}: " . number_format($moveDuration, 2) . " seconds");
-            }
-        }
+    if ($attempt < $maxRetries && strpos($e->getMessage(), 'cURL error') !== false) {
+        $this->info("cURL error for {$filePath}: {$e->getMessage()}, retrying... (Attempt {$attempt}/{$maxRetries})");
+        \Illuminate\Support\Facades\Log::info("cURL error for {$filePath}: {$e->getMessage()}, retrying... (Attempt {$attempt}/{$maxRetries})");
+        $attempt++;
+        sleep(pow(2, $attempt)); // Gunakan backoff eksponensial: 2, 4, 8 detik
+        continue;
     }
+    $this->error("Error processing file {$filePath}: " . $e->getMessage());
+    \Illuminate\Support\Facades\Log::error("Error processing file {$filePath}: {$e->getMessage()}");
+    $errorDir = strpos($e->getMessage(), 'cURL error 28') !== false ? 'error_timeout' : $this->errorDir;
+    $this->moveErrorFile($filePath, $errorDir); // Logging sudah di moveErrorFile
+    return;
+}
+    }
+}
 
     private function moveToScanned($filePath)
     {
@@ -401,31 +439,37 @@ class ProcessStockOpname extends Command
     }
 
     private function moveErrorFile($filePath, $errorDir)
-    {
-        $this->moveProcessedFile($filePath, $errorDir);
-    }
+{
+    $disk = Storage::disk('stock_opname');
+    $filename = pathinfo($filePath, PATHINFO_BASENAME);
+    $newPath = $errorDir . '/' . $filename;
+
+    $startTime = microtime(true);
+    $disk->move($filePath, $newPath);
+    $duration = microtime(true) - $startTime;
+    $this->line("<fg=magenta>♻️ File dipindah ke:</> {$newPath}");
+    $this->info("Move to {$errorDir} time for {$filePath}: " . number_format($duration, 2) . " seconds");
+    \Illuminate\Support\Facades\Log::info("Move to {$errorDir} time for {$filePath}: " . number_format($duration, 2) . " seconds");
+    return $newPath;
+}
 
     private function handleApiError($response, $filePath)
-    {
-        $status = $response->status();
-        $error = $response->json();
+{
+    $status = $response->status();
+    $error = $response->json();
 
-        $this->error("API Error [{$status}]: " . ($error['message'] ?? 'Unknown error'));
-        \Illuminate\Support\Facades\Log::error("API Error [{$status}] for file {$filePath}: " . ($error['message'] ?? 'Unknown error'));
+    $this->error("API Error [{$status}]: " . ($error['message'] ?? 'Unknown error'));
+    \Illuminate\Support\Facades\Log::error("API Error [{$status}] for file {$filePath}: " . ($error['message'] ?? 'Unknown error'));
 
-        $errorDir = match ($status) {
-            400 => 'error_400',
-            401 => 'error_401',
-            500 => 'error_500',
-            default => $this->errorDir,
-        };
+    $errorDir = match ($status) {
+        400 => 'error_400',
+        401 => 'error_401',
+        500 => 'error_500',
+        default => $this->errorDir,
+    };
 
-        $startTime = microtime(true);
-        $this->moveErrorFile($filePath, $errorDir);
-        $duration = microtime(true) - $startTime;
-        $this->info("Move to {$errorDir} time for {$filePath}: " . number_format($duration, 2) . " seconds");
-        \Illuminate\Support\Facades\Log::info("Move to {$errorDir} time for {$filePath}: " . number_format($duration, 2) . " seconds");
-    }
+    $this->moveErrorFile($filePath, $errorDir); // Logging sudah ditangani di moveErrorFile
+}
 
     private function displayFormattedResult($data)
 {
